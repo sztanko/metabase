@@ -97,7 +97,8 @@
 
 (defn create-or-update-field-values!
   "Create or update the FieldValues object for FIELD. If the FieldValues object already exists, then update values for
-   it; otherwise create a new FieldValues object with the newly fetched values."
+   it; otherwise create a new FieldValues object with the newly fetched values. Returns whether the field values were
+   created/updated/deleted as a result of this call."
   [field & [human-readable-values]]
   (let [field-values (FieldValues :field_id (u/get-id field))
         values       (distinct-values field)
@@ -109,7 +110,8 @@
         (log/debug (format "Storing updated FieldValues for Field %s..." field-name))
         (db/update-non-nil-keys! FieldValues (u/get-id field-values)
           :values                values
-          :human_readable_values (fixup-human-readable-values field-values values)))
+          :human_readable_values (fixup-human-readable-values field-values values))
+        ::fv-updated)
       ;; if FieldValues object doesn't exist create one
       values
       (do
@@ -117,10 +119,13 @@
         (db/insert! FieldValues
           :field_id              (u/get-id field)
           :values                values
-          :human_readable_values human-readable-values))
+          :human_readable_values human-readable-values)
+        ::fv-created)
       ;; otherwise this Field isn't eligible, so delete any FieldValues that might exist
       :else
-      (db/delete! FieldValues :field_id (u/get-id field)))))
+      (do
+        (db/delete! FieldValues :field_id (u/get-id field))
+        ::fv-deleted))))
 
 
 (defn field-values->pairs
@@ -139,7 +144,8 @@
   {:pre [(integer? field-id)]}
   (when (field-should-have-field-values? field)
     (or (FieldValues :field_id field-id)
-        (create-or-update-field-values! field human-readable-values))))
+        (when (contains? #{::fv-created ::fv-updated} (create-or-update-field-values! field human-readable-values))
+          (FieldValues :field_id field-id)))))
 
 (defn save-field-values!
   "Save the `FieldValues` for FIELD-ID, creating them if needed, otherwise updating them."

@@ -15,6 +15,7 @@
              [field :refer [Field]]
              [field-values :as field-values :refer [FieldValues]]
              [table :refer [Table]]]
+            [metabase.sync.util-test :as sut]
             [metabase.test
              [data :as data]
              [util :as tu]]
@@ -253,17 +254,20 @@
 ;; Test that we will remove field-values when they aren't appropriate. Calling `sync-database!` below should cause
 ;; them to get removed since the Field isn't `has_field_values` = `list`
 (expect
-  [[1 2 3]
+  [{:errors 0, :created 0, :updated 0, :deleted 0}
+   {:errors 0, :created 0, :updated 0, :deleted 1}
+   [1 2 3]
    nil]
   (tt/with-temp* [Database [db {:engine :sync-test}]]
-    (sync-database! db)
-    (let [table-id (db/select-one-id Table, :schema "default", :name "movie")
+    (let [initial-fv-stats (sut/sync-database! "update-field-values" db)
+          table-id (db/select-one-id Table, :schema "default", :name "movie")
           field-id (db/select-one-id Field, :table_id table-id, :name "studio")]
       (tt/with-temp FieldValues [_ {:field_id field-id
                                     :values   "[1,2,3]"}]
         (let [initial-field-values (db/select-one-field :values FieldValues, :field_id field-id)]
-          (sync-database! db)
-          [initial-field-values
+          [(sut/only-step-keys initial-fv-stats)
+           (sut/only-step-keys (sut/sync-database! "update-field-values" db))
+           initial-field-values
            (db/select-one-field :values FieldValues, :field_id field-id)])))))
 
 
@@ -306,23 +310,27 @@
   (db/select-one-field :fk_target_field_id Field, :id (data/id :venues :category_id)))
 
 ;; Check that sync-table! causes FKs to be set like we'd expect
-(expect [{:special_type :type/FK, :fk_target_field_id true}
-         {:special_type nil,      :fk_target_field_id false}
-         {:special_type :type/FK, :fk_target_field_id true}]
+(expect
+  [{:total-fks 3, :updated-fks 0, :total-failed 0}
+   {:special_type :type/FK, :fk_target_field_id true}
+   {:special_type nil,      :fk_target_field_id false}
+   {:total-fks 3, :updated-fks 1, :total-failed 0}
+   {:special_type :type/FK, :fk_target_field_id true}]
   (let [field-id (data/id :checkins :user_id)
         get-special-type-and-fk-exists? (fn []
                                           (into {} (-> (db/select-one [Field :special_type :fk_target_field_id],
                                                          :id field-id)
                                                        (update :fk_target_field_id #(db/exists? Field :id %)))))]
-    [ ;; FK should exist to start with
+    [
+     (sut/only-step-keys (sut/sync-database! "sync-fks" (Database (data/id))))
+     ;; FK should exist to start with
      (get-special-type-and-fk-exists?)
      ;; Clear out FK / special_type
      (do (db/update! Field field-id, :special_type nil, :fk_target_field_id nil)
          (get-special-type-and-fk-exists?))
      ;; Run sync-table and they should be set again
-     (let [table (Table (data/id :checkins))]
-       (sync-table! table)
-       (get-special-type-and-fk-exists?))]))
+     (sut/only-step-keys (sut/sync-database! "sync-fks" (Database (data/id))))
+     (get-special-type-and-fk-exists?)]))
 
 
 ;;; ## FieldValues Syncing
@@ -331,31 +339,38 @@
       get-field-values-id (fn [] (db/select-one-id FieldValues, :field_id (data/id :venues :price)))]
   ;; Test that when we delete FieldValues syncing the Table again will cause them to be re-created
   (expect
-    [[1 2 3 4]  ; 1
-     nil        ; 2
-     [1 2 3 4]] ; 3
+    [[1 2 3 4]  ;; 1
+     nil        ;; 2
+     {:errors 0, :created 1, :updated 5, :deleted 0} ;; 3
+     [1 2 3 4]] ;; 4
     [ ;; 1. Check that we have expected field values to start with
      (get-field-values)
      ;; 2. Delete the Field values, make sure they're gone
      (do (db/delete! FieldValues :id (get-field-values-id))
          (get-field-values))
-     ;; 3. Now re-sync the table and make sure they're back
-     (do (sync-table! (Table (data/id :venues)))
-         (get-field-values))])
+     ;; 3. After the delete, a field values should be created, the rest updated
+     (sut/only-step-keys (sut/sync-database! "update-field-values" (Database (data/id))))
+     ;; 4. Now re-sync the table and make sure they're back
+     (get-field-values)])
 
   ;; Test that syncing will cause FieldValues to be updated
   (expect
-    [[1 2 3 4]  ; 1
-     [1 2 3]    ; 2
-     [1 2 3 4]] ; 3
+    [[1 2 3 4]  ;; 1
+     [1 2 3]    ;; 2
+     {:errors 0, :created 0, :updated 6, :deleted 0} ;; 3
+     [1 2 3 4]] ;; 4
     [ ;; 1. Check that we have expected field values to start with
-     (get-field-values)
+     (do
+       (sut/sync-database! "update-field-values" (Database (data/id)))
+       (get-field-values))
      ;; 2. Update the FieldValues, remove one of the values that should be there
-     (do (db/update! FieldValues (get-field-values-id), :values [1 2 3])
-         (get-field-values))
-     ;; 3. Now re-sync the table and make sure the value is back
-     (do (sync-table! (Table (data/id :venues)))
-         (get-field-values))]))
+     (do
+       (db/update! FieldValues (get-field-values-id), :values [1 2 3])
+       (get-field-values))
+     ;; 3. Resync the table, checking that is was updated
+     (sut/only-step-keys (sut/sync-database! "update-field-values" (Database (data/id))))
+     ;; 4. Make sure the value is back
+     (get-field-values)]))
 
 ;; Make sure that if a Field's cardinality passes `list-cardinality-threshold` (currently 100) the corresponding
 ;; FieldValues entry will be deleted (#3215)
@@ -397,11 +412,14 @@
       (update :max #(u/round-to-decimals 4 %))))
 
 (expect
-  [{:min -165.374 :max -73.9533}
+  [{:no-data-fingerprints 0,  :failed-fingerprints    0,
+    :updated-fingerprints 16, :fingerprints-attempted 16}
+   {:min -165.374 :max -73.9533}
    {:min 10.0646 :max 40.7794}]
   (tt/with-temp* [Database [database {:details (:details (Database (data/id))), :engine :h2}]
                   Table    [table    {:db_id (u/get-id database), :name "VENUES"}]]
-    (sync-table! table)
-    (map narrow-to-min-max
-         [(db/select-one-field :fingerprint Field, :id (data/id :venues :longitude))
-          (db/select-one-field :fingerprint Field, :id (data/id :venues :latitude))])))
+    (cons
+     (sut/only-step-keys (sut/sync-database! "fingerprint-fields" database))
+     (map narrow-to-min-max
+          [(db/select-one-field :fingerprint Field, :id (data/id :venues :longitude))
+           (db/select-one-field :fingerprint Field, :id (data/id :venues :latitude))]))))
