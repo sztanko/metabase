@@ -1,6 +1,7 @@
 import {
   useSharedAdminLogin,
   createTestStore,
+  eventually,
 } from "__support__/integrated_tests";
 
 import {
@@ -393,10 +394,10 @@ describe("FieldApp", () => {
         .first();
       click(useFKButton);
       store.waitForActions([UPDATE_FIELD_DIMENSION, FETCH_TABLE_METADATA]);
-      // TODO: Figure out a way to avoid using delay – the use of delays may lead to occasional CI failures
-      await delay(500);
 
-      expect(section.find(RemappingNamingTip).length).toBe(1);
+      await eventually(() =>
+        expect(section.find(RemappingNamingTip).length).toBe(1),
+      );
 
       dispatchBrowserEvent("mousedown", {
         e: { target: document.documentElement },
