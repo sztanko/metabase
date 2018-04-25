@@ -4101,12 +4101,13 @@ databaseChangeLog:
       changes:
         - addColumn:
             tableName: collection
-            columns: parent_id
-            type: int
-            remarks: 'Optional ID of the parent Collection of this Collection.'
-            constraints:
-              references: collection(id)
-              foreignKeyName: fk_collection_parent_id
+            columns:
+              name: parent_id
+              type: int
+              remarks: 'Optional ID of the parent Collection of this Collection.'
+              constraints:
+                references: collection(id)
+                foreignKeyName: fk_collection_parent_id
         - createIndex:
             tableName: collection
             indexName: idx_collection_parent_id

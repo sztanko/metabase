@@ -13,7 +13,8 @@
    :slug        "my_favorite_cards"
    :description nil
    :color       "#ABCDEF"
-   :archived    false}
+   :archived    false
+   :parent_id   nil}
   (tt/with-temp Collection [collection {:name "My Favorite Cards", :color "#ABCDEF"}]
     (dissoc collection :id)))
 
