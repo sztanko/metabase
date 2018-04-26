@@ -17,7 +17,7 @@
    :description nil
    :color       "#ABCDEF"
    :archived    false
-   :parent_id   nil}
+   :parent_id   "/"}
   (tt/with-temp Collection [collection {:name "My Favorite Cards", :color "#ABCDEF"}]
     (dissoc collection :id)))
 
@@ -183,16 +183,16 @@
 
 ;; Can we hydrate `ancestors` the way we'd hope?
 (expect
-  [{:id Integer, :name "Grandparent"}
-   {:id Integer, :name "Parent"}]
+  [#metabase.models.collection.CollectionInstance{:id Integer, :name "Grandparent"}
+   #metabase.models.collection.CollectionInstance{:id Integer, :name "Parent"}]
   (with-a-family-of-collections [_ _ collection]
     (for [ancestor (collection/ancestors collection)]
       (update ancestor :id class))))
 
 ;; Can we hydrate `children` Collections the way we'd hope?
 (expect
-  [{:id Integer, :name "Another Child"}
-   {:id Integer, :name "Child"}]
+  #{#metabase.models.collection.CollectionInstance{:id Integer, :name "Another Child"}
+    #metabase.models.collection.CollectionInstance{:id Integer, :name "Child"}}
   (with-a-family-of-collections [_ parent child]
     (tt/with-temp Collection [_ {:name "Another Child", :location (:location child)}]
       (for [child (collection/children parent)]

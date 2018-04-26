@@ -183,7 +183,7 @@
    :description nil
    :color       "#123456"
    :archived    false
-   :parent_id   nil}
+   :location    "/"}
   (dissoc (u/prog1 ((user->client :crowberto) :post 200 "collection"
                     {:name "Stamp Collection", :color "#123456"})
             ;; make sure we clean up after ourselves
@@ -209,7 +209,7 @@
    :description nil
    :color       "#ABCDEF"
    :archived    false
-   :parent_id   nil}
+   :location    "/"}
   ((user->client :crowberto) :put 200 (str "collection/" (u/get-id collection))
    {:name "My Beautiful Collection", :color "#ABCDEF"}))
 

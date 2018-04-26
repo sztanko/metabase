@@ -62,8 +62,9 @@
 (defn- valid-location-path? [s]
   (and (string? s)
        (seq s)
-       (re-matches #"/(\d+/)*" s)
-       (apply distinct? (unchecked-location-path->ids s))))
+       (or (= s "/")
+           (and (re-matches #"/(\d+/)*" s)
+                (apply distinct? (unchecked-location-path->ids s))))))
 
 (def LocationPath
   (s/pred valid-location-path?))
@@ -98,7 +99,7 @@
 
 (defn children [collection]
   {:hydrate :child_collections}
-  (db/select [Collection :id :name] :location (children-location collection)))
+  (set (db/select [Collection :id :name] :location (children-location collection))))
 
 (s/defn all-ids-in-location-path-are-valid? :- s/Bool
   [location-path :- LocationPath]
