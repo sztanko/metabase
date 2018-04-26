@@ -1,4 +1,5 @@
 (ns metabase.models.collection
+  (:refer-clojure :exclude [ancestors])
   (:require [clojure
              [data :as data]
              [string :as str]]
@@ -20,6 +21,11 @@
   254)
 
 (models/defmodel Collection :collection)
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                         Slug & Hex Color & Validation                                          |
+;;; +----------------------------------------------------------------------------------------------------------------+
 
 (defn- assert-unique-slug [slug]
   (when (db/exists? Collection :slug slug)
@@ -43,12 +49,97 @@
              {:status-code 400, :errors {:name (tru "cannot be blank")}})))
   (u/slugify collection-name collection-slug-max-length))
 
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                               Nested Collections                                               |
+;;; +----------------------------------------------------------------------------------------------------------------+
+
+(defn- unchecked-location-path->ids
+  [location-path]
+  (for [^String id-str (rest (str/split location-path #"/"))]
+    (Integer/parseInt id-str)))
+
+(defn- valid-location-path? [s]
+  (and (string? s)
+       (seq s)
+       (re-matches #"/(\d+/)*" s)
+       (apply distinct? (unchecked-location-path->ids s))))
+
+(def LocationPath
+  (s/pred valid-location-path?))
+
+(s/defn location-path :- LocationPath
+  [& collections-or-ids :- [(s/cond-pre su/IntGreaterThanZero su/Map)]]
+  (if-not (seq collections-or-ids)
+    "/"
+    (str
+     "/"
+     (str/join "/" (for [collection-or-id collections-or-ids]
+                     (u/get-id collection-or-id)))
+     "/")))
+
+(s/defn location-path->ids :- [su/IntGreaterThanZero]
+  [location-path :- LocationPath]
+  (unchecked-location-path->ids location-path))
+
+(s/defn location-path->parent-id :- (s/maybe su/IntGreaterThanZero)
+  [location-path :- LocationPath]
+  (last (location-path->ids location-path)))
+
+(s/defn ^:hydrate ancestors :- [CollectionInstance]
+  [{:keys [location]}]
+  (when-let [ancestor-ids (seq (location-path->ids location))]
+    (println "ancestor-ids:" ancestor-ids) ; NOCOMMIT
+    (db/select [Collection :name :id] :id [:in ancestor-ids])))
+
+(s/defn children-location :- LocationPath
+  [{:keys [location], :as collection}]
+  (str location (u/get-id collection) "/"))
+
+(defn children [collection]
+  {:hydrate :child_collections}
+  (db/select [Collection :id :name] :location (children-location collection)))
+
+(s/defn all-ids-in-location-path-are-valid? :- s/Bool
+  [location-path :- LocationPath]
+  (println "location-path:" location-path) ; NOCOMMIT
+  (or
+   ;; if location is just the root Collection there are no IDs in the path, so nothing to check
+   (= location-path "/")
+   ;; otherwise get all the IDs in the path and then make sure the count Collections with those IDs matches the number
+   ;; of IDs
+   (let [ids (location-path->ids location-path)]
+     (println "ids:" ids) ; NOCOMMIT
+     (= (count ids)
+        (db/count Collection :id [:in ids])))))
+
+(defn- assert-valid-location [{:keys [location], :as collection}]
+  (when (contains? collection :location)
+    (when-not (valid-location-path? location)
+      (throw
+       (ex-info (tru "Invalid Collection location: path is invalid.")
+         {:status-code 400
+          :errors      {:location (tru "Invalid Collection location: path is invalid.")}})))
+    (println "(all-ids-in-location-path-are-valid? location):" (all-ids-in-location-path-are-valid? location)) ; NOCOMMIT
+    (when-not (all-ids-in-location-path-are-valid? location)
+      (throw
+       (ex-info (tru "Invalid Collection location: some or all ancestors do not exist.")
+         {:status-code 404
+          :errors      {:location (tru "Invalid Collection location: some or all ancestors do not exist.")}})))))
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                       Toucan IModel & Perms Method Impls                                       |
+;;; +----------------------------------------------------------------------------------------------------------------+
+
 (defn- pre-insert [{collection-name :name, color :color, :as collection}]
+  (assert-valid-location collection)
   (assert-valid-hex-color color)
   (assoc collection :slug (u/prog1 (slugify collection-name)
                             (assert-unique-slug <>))))
 
 (defn- pre-update [{collection-name :name, id :id, color :color, archived? :archived, :as collection}]
+  (assert-valid-location collection)
   ;; make sure hex color is valid
   (when (contains? collection :color)
     (assert-valid-hex-color color))
@@ -69,7 +160,9 @@
   ;; shouldn't be deleting Collections, but rather archiving them instead
   (doseq [model ['Card 'Pulse 'Dashboard]]
     (db/update-where! model {:collection_id (u/get-id collection)}
-      :collection_id nil)))
+      :collection_id nil))
+  ;; Now delete all the Children of this Collection
+  (db/delete! Collection :location (children-location collection)))
 
 (defn perms-objects-set
   "Return the required set of permissions to READ-OR-WRITE COLLECTION-OR-ID."
@@ -193,7 +286,9 @@
    (update-graph! (assoc-in (graph) (cons :groups ks) new-value))))
 
 
-;;; ------------------------------------------- Perms Checking Helper Fns --------------------------------------------
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                           Perms Checking Helper Fns                                            |
+;;; +----------------------------------------------------------------------------------------------------------------+
 
 (defn check-write-perms-for-collection
   "Check that we have write permissions for Collection with `collection-id`, or throw a 403 Exception. If

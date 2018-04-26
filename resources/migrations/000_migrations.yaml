@@ -4102,15 +4102,15 @@ databaseChangeLog:
         - addColumn:
             tableName: collection
             columns:
-              name: parent_id
-              type: int
-              remarks: 'Optional ID of the parent Collection of this Collection.'
+              name: location
+              type: varchar(254)
+              remarks: 'Directory-structure path of ancestor Collections. e.g. "/1/2/" means our Parent is Collection 2, and their parent is Collection 1.'
               constraints:
-                references: collection(id)
-                foreignKeyName: fk_collection_parent_id
+                nullable: false
+              defaultValue: "/"
         - createIndex:
             tableName: collection
-            indexName: idx_collection_parent_id
+            indexName: idx_collection_location
             columns:
               - column:
-                  name: parent_id
+                  name: location
