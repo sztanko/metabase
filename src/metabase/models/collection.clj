@@ -3,7 +3,7 @@
   (:require [clojure
              [data :as data]
              [string :as str]]
-            [metabase.api.common :refer [*current-user-id* *current-user-permissions-set*] :as api]
+            [metabase.api.common :as api :refer [*current-user-id* *current-user-permissions-set*]]
             [metabase.models
              [collection-revision :as collection-revision :refer [CollectionRevision]]
              [interface :as i]
@@ -51,10 +51,28 @@
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
-;;; |                                               Nested Collections                                               |
+;;; |                                       Nested Collections: Location Paths                                       |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
+;; "Location Paths" are strings that keep track of where a Colllection lives in a filesystem-like hierarchy. Almost
+;; all of our backend code does not need to know this and can act as if there is no Collection hierarchy; it is,
+;; however, presented as such in the UI. Perhaps it is best to think of the hierarchy as a façade.
+;;
+;; For example, Collection 30 might have a `location` like `/10/20/`, which means it's the child of Collection 20, who
+;; itself is the child of Collection 10. Note that the `location` does not include the ID of Collection 30 itself.
+;;
+;; Storing the relationship in this manner, rather than with foreign keys such as `:parent_id`, allows us to
+;; efficiently fetch all ancestors or descendants of a Collection without having to make multiple DB calls (e.g. to
+;; fetch a grandparent, you'd first have to fetch its parent to get their `parent_id`).
+;;
+;; The following functions are useful for working with the Collection `location`, breaking it out into component IDs,
+;; assembling IDs into a location path, and so forth.
+
 (defn- unchecked-location-path->ids
+  "*** Don't use this directly! Instead use `location-path->ids`. ***
+
+  'Explode' a `location-path` into a sequence of Collection IDs, and parse them as integers. THIS DOES NOT VALIDATE
+  THAT THE PATH OR RESULTS ARE VALID. This unchecked version exists solely to power the other version below."
   [location-path]
   (for [^String id-str (rest (str/split location-path #"/"))]
     (Integer/parseInt id-str)))
@@ -67,9 +85,13 @@
                 (apply distinct? (unchecked-location-path->ids s))))))
 
 (def LocationPath
+  "Schema for a directory-style 'path' to the location of a Collection."
   (s/pred valid-location-path?))
 
 (s/defn location-path :- LocationPath
+  "Build a 'location path' from a sequence of `collections-or-ids`.
+
+     (location-path 10 20) ; -> \"/10/20/\""
   [& collections-or-ids :- [(s/cond-pre su/IntGreaterThanZero su/Map)]]
   (if-not (seq collections-or-ids)
     "/"
@@ -80,17 +102,103 @@
      "/")))
 
 (s/defn location-path->ids :- [su/IntGreaterThanZero]
+  "'Explode' a `location-path` into a sequence of Collection IDs, and parse them as integers.
+
+     (location-path->ids \"/10/20/\") ; -> [10 20]"
   [location-path :- LocationPath]
   (unchecked-location-path->ids location-path))
 
 (s/defn location-path->parent-id :- (s/maybe su/IntGreaterThanZero)
+  "Given a `location-path` fetch the ID of the direct of a Collection.
+
+     (location-path->parent-id \"/10/20/\") ; -> 20"
   [location-path :- LocationPath]
   (last (location-path->ids location-path)))
+
+(s/defn all-ids-in-location-path-are-valid? :- s/Bool
+  "Do all the IDs in `location-path` belong to actual Collections? (This requires a DB call to check this, so this
+  should only be used when creating/updating a Collection. Don't use this for casual schema validation.)"
+  [location-path :- LocationPath]
+  (or
+   ;; if location is just the root Collection there are no IDs in the path, so nothing to check
+   (= location-path "/")
+   ;; otherwise get all the IDs in the path and then make sure the count Collections with those IDs matches the number
+   ;; of IDs
+   (let [ids (location-path->ids location-path)]
+     (= (count ids)
+        (db/count Collection :id [:in ids])))))
+
+(defn- assert-valid-location
+  "Assert that the `location` property of a `collection`, if specified, is valid. This checks that it is valid both from
+  a schema standpoint, and from a 'do the referenced Collections exist' standpoint. Intended for use as part of
+  `pre-update` and `pre-insert`."
+  [{:keys [location], :as collection}]
+  (when (contains? collection :location)
+    (when-not (valid-location-path? location)
+      (throw
+       (ex-info (tru "Invalid Collection location: path is invalid.")
+         {:status-code 400
+          :errors      {:location (tru "Invalid Collection location: path is invalid.")}})))
+    (when-not (all-ids-in-location-path-are-valid? location)
+      (throw
+       (ex-info (tru "Invalid Collection location: some or all ancestors do not exist.")
+         {:status-code 404
+          :errors      {:location (tru "Invalid Collection location: some or all ancestors do not exist.")}})))))
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                 Nested Collections: "Effective" Location Paths                                 |
+;;; +----------------------------------------------------------------------------------------------------------------+
+
+;; "Effective" Location Paths are location paths for Collections that exclude the IDs of Collections the current user
+;; isn't allowed to see.
+;;
+;; For example, if a Collection has a `location` of `/10/20/30/`, and the Current User is allowed to see Collections
+;; 10 and 30, but not 20, we will show them an "effective" location path of `/10/30/`. This is used for things like
+;; breadcrumbing in the frontend.
+
+(s/defn permissions-set->visible-collection-ids :- (s/cond-pre (s/eq :all) #{su/IntGreaterThanZero})
+  "Given a `permissions-set` (presumably those of the current user), return a set of IDs of Collections that the
+  permissions set allows you to view. For those with *root* permissions (e.g., an admin), this function will return
+  `:all`, signifying that you are allowed to view all Collections.
+
+    (permissions-set->visible-collection-ids #{\"/collection/10/\"}) ; -> #{10}
+    (permissions-set->visible-collection-ids #{\"/\"})               ; -> :all"
+  [permissions-set :- #{perms/UserPath}]
+  (if (contains? permissions-set "/")
+    :all
+    (set (for [path  permissions-set
+               :let  [[_ id-str] (re-matches #"/collection/(\d+)/(read/)?" path)]
+               :when id-str]
+           (Integer/parseInt id-str)))))
+
+(s/defn effective-location-path :- LocationPath
+  "Given a `location-path` and a set of Collection IDs one is allowed to view (obtained from
+  `permissions-set->visibile-collection-ids` above), calculate the 'effective' location path (excluding IDs of
+  Collections for which we do not have read perms) we should show to the User.
+
+  When called with a single argument, `collection`, this is used as a hydration function to hydrate
+  `:effective_location`."
+  {:hydrate :effective_location}
+  ([collection :- su/Map]
+   (effective-location-path (:location collection)
+                            (permissions-set->visible-collection-ids @*current-user-permissions-set*)))
+
+  ([real-location-path :- LocationPath, allowed-collection-ids :- (s/cond-pre (s/eq :all) #{su/IntGreaterThanZero})]
+   (if (= allowed-collection-ids :all)
+     real-location-path
+     (apply location-path (for [id    (location-path->ids real-location-path)
+                                :when (contains? allowed-collection-ids id)]
+                            id)))))
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                         Nested Collections: Ancestors, Descendants, Child Collections                          |
+;;; +----------------------------------------------------------------------------------------------------------------+
 
 (s/defn ^:hydrate ancestors :- [CollectionInstance]
   [{:keys [location]}]
   (when-let [ancestor-ids (seq (location-path->ids location))]
-    (println "ancestor-ids:" ancestor-ids) ; NOCOMMIT
     (db/select [Collection :name :id] :id [:in ancestor-ids])))
 
 (s/defn children-location :- LocationPath
@@ -100,33 +208,6 @@
 (defn children [collection]
   {:hydrate :child_collections}
   (set (db/select [Collection :id :name] :location (children-location collection))))
-
-(s/defn all-ids-in-location-path-are-valid? :- s/Bool
-  [location-path :- LocationPath]
-  (println "location-path:" location-path) ; NOCOMMIT
-  (or
-   ;; if location is just the root Collection there are no IDs in the path, so nothing to check
-   (= location-path "/")
-   ;; otherwise get all the IDs in the path and then make sure the count Collections with those IDs matches the number
-   ;; of IDs
-   (let [ids (location-path->ids location-path)]
-     (println "ids:" ids) ; NOCOMMIT
-     (= (count ids)
-        (db/count Collection :id [:in ids])))))
-
-(defn- assert-valid-location [{:keys [location], :as collection}]
-  (when (contains? collection :location)
-    (when-not (valid-location-path? location)
-      (throw
-       (ex-info (tru "Invalid Collection location: path is invalid.")
-         {:status-code 400
-          :errors      {:location (tru "Invalid Collection location: path is invalid.")}})))
-    (println "(all-ids-in-location-path-are-valid? location):" (all-ids-in-location-path-are-valid? location)) ; NOCOMMIT
-    (when-not (all-ids-in-location-path-are-valid? location)
-      (throw
-       (ex-info (tru "Invalid Collection location: some or all ancestors do not exist.")
-         {:status-code 404
-          :errors      {:location (tru "Invalid Collection location: some or all ancestors do not exist.")}})))))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+

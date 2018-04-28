@@ -1,13 +1,12 @@
 (ns metabase.models.collection-test
   (:require [expectations :refer :all]
+            [metabase.api.common :refer [*current-user-permissions-set*]]
             [metabase.models
              [card :refer [Card]]
              [collection :as collection :refer [Collection]]]
-            [metabase.util :as u]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]]
             [metabase.test.util :as tu]
+            [metabase.util :as u]
+            [toucan.db :as db]
             [toucan.util.test :as tt]))
 
 ;; test that we can create a new Collection with valid inputs
@@ -17,7 +16,7 @@
    :description nil
    :color       "#ABCDEF"
    :archived    false
-   :parent_id   "/"}
+   :location    "/"}
   (tt/with-temp Collection [collection {:name "My Favorite Cards", :color "#ABCDEF"}]
     (dissoc collection :id)))
 
@@ -124,6 +123,65 @@
 (expect Exception      (collection/children-location {:id "a",  :location "/1/"}))
 (expect Exception      (collection/children-location {:id 1,    :location "/1/2/"}))
 
+;; Make sure we can look at the current user's permissions set and figure out which Collections they're allowed to see
+(expect
+  #{8 9}
+  (collection/permissions-set->visible-collection-ids
+   #{"/db/1/"
+     "/db/2/native/"
+     "/db/3/native/read/"
+     "/db/4/schema/"
+     "/db/5/schema/PUBLIC/"
+     "/db/6/schema/PUBLIC/table/7/"
+     "/collection/8/"
+     "/collection/9/read/"}))
+
+;; If the current user has root permissions then make sure the function returns `:all`, which signifies that they are
+;; able to see all Collections
+(expect
+  :all
+  (collection/permissions-set->visible-collection-ids
+   #{"/"
+     "/db/2/native/"
+     "/collection/9/read/"}))
+
+;; Can we calculate `effective-location-path`?
+(expect "/10/20/"    (collection/effective-location-path "/10/20/30/" #{10 20}))
+(expect "/10/30/"    (collection/effective-location-path "/10/20/30/" #{10 30}))
+(expect "/"          (collection/effective-location-path "/10/20/30/" #{}))
+(expect "/10/20/30/" (collection/effective-location-path "/10/20/30/" #{10 20 30}))
+(expect "/10/20/30/" (collection/effective-location-path "/10/20/30/" :all))
+(expect Exception    (collection/effective-location-path "/10/20/30/" nil))
+(expect Exception    (collection/effective-location-path "/10/20/30/" [20]))
+(expect Exception    (collection/effective-location-path nil #{}))
+(expect Exception    (collection/effective-location-path [10 20] #{}))
+
+;; Does the function also work if we call the single-arity version that powers hydration?
+(expect
+  "/10/20/"
+  (binding [*current-user-permissions-set* (atom #{"/collection/10/" "/collection/20/read/"})]
+    (collection/effective-location-path {:location "/10/20/30/"})))
+
+(expect
+  "/10/30/"
+  (binding [*current-user-permissions-set* (atom #{"/collection/10/read/" "/collection/30/read/"})]
+    (collection/effective-location-path {:location "/10/20/30/"})))
+
+(expect
+  "/"
+  (binding [*current-user-permissions-set* (atom #{})]
+    (collection/effective-location-path {:location "/10/20/30/"})))
+
+(expect
+  "/10/20/30/"
+  (binding [*current-user-permissions-set* (atom #{"/collection/10/" "/collection/20/read/" "/collection/30/read/"})]
+    (collection/effective-location-path {:location "/10/20/30/"})))
+
+(expect
+  "/10/20/30/"
+  (binding [*current-user-permissions-set* (atom #{"/"})]
+    (collection/effective-location-path {:location "/10/20/30/"})))
+
 ;; Can we INSERT a Collection with a valid path?
 (defn- insert-collection-with-location! [location]
   (tu/with-model-cleanup [Collection]
@@ -170,7 +228,7 @@
 
 ;;; --------------------------------------- Related Collection Hydration Tests ---------------------------------------
 
-(defmacro ^:private with-a-family-of-collections
+(defmacro with-a-family-of-collections
   {:style/indent 1}
   [[grandparent-binding parent-binding child-binding] & body]
   `(tt/with-temp* [Collection [grandparent# {:name "Grandparent"}]
@@ -183,20 +241,20 @@
 
 ;; Can we hydrate `ancestors` the way we'd hope?
 (expect
-  [#metabase.models.collection.CollectionInstance{:id Integer, :name "Grandparent"}
-   #metabase.models.collection.CollectionInstance{:id Integer, :name "Parent"}]
+  #{#metabase.models.collection.CollectionInstance{:id true, :name "Grandparent"}
+    #metabase.models.collection.CollectionInstance{:id true, :name "Parent"}}
   (with-a-family-of-collections [_ _ collection]
-    (for [ancestor (collection/ancestors collection)]
-      (update ancestor :id class))))
+    (set (for [ancestor (collection/ancestors collection)]
+           (update ancestor :id integer?)))))
 
 ;; Can we hydrate `children` Collections the way we'd hope?
 (expect
-  #{#metabase.models.collection.CollectionInstance{:id Integer, :name "Another Child"}
-    #metabase.models.collection.CollectionInstance{:id Integer, :name "Child"}}
+  #{#metabase.models.collection.CollectionInstance{:id true, :name "Another Child"}
+    #metabase.models.collection.CollectionInstance{:id true, :name "Child"}}
   (with-a-family-of-collections [_ parent child]
     (tt/with-temp Collection [_ {:name "Another Child", :location (:location child)}]
-      (for [child (collection/children parent)]
-        (update child :id class)))))
+      (set (for [child (collection/children parent)]
+             (update child :id integer?))))))
 
 
 ;; When we delete a Collection do its descendants get deleted as well?

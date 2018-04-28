@@ -16,6 +16,7 @@
              [pulse-channel :refer [PulseChannel]]
              [pulse-channel-recipient :refer [PulseChannelRecipient]]
              [table :refer [Table]]]
+            [metabase.models.collection-test :as collection-test]
             [metabase.test.data.users :refer [user->client user->id]]
             [metabase.test.util :as tu]
             [toucan.db :as db]
@@ -126,6 +127,57 @@
     (with-some-children-of-collection collection
       (-> ((user->client :rasta) :get 200 (str "collection/" (u/get-id collection) "?model=dashboards"))
           remove-ids-from-collection-detail))))
+
+;; Make sure we also return the `child_collections` and they get filtered appropriately as well
+(defn- api-get-collection-ancestors-and-child-collections [collection-or-id]
+  (into {} (for [[k vs] (-> ((user->client :rasta) :get 200 (str "collection/" (u/get-id collection-or-id)))
+                           (select-keys [:ancestors :child_collections]))]
+             [k (map :name vs)])))
+
+(defmacro ^:private with-a-family-of-collections-and-permissions
+  "Totally awesome macro that builds on `collection-test/with-a-family-of-collections`, but also grants read permissions
+  to the All Users group for any Collections you bind to something other than `_`. Wow!"
+  {:style/indent 1}
+  [[grandparent-binding parent-binding child-binding] & body]
+  (let [grandparent (gensym "grandparent_")
+        parent      (gensym "parent_")
+        child       (gensym "child_")]
+    `(collection-test/with-a-family-of-collections [~grandparent ~parent ~child]
+       ~@(for [[binding collection] [[grandparent-binding grandparent]
+                                     [parent-binding      parent]
+                                     [child-binding       child]]
+               :when                (not= binding '_)]
+           `(perms/grant-collection-read-permissions! (group/all-users) ~collection))
+       (let [~grandparent-binding ~grandparent
+             ~parent-binding      ~parent
+             ~child-binding       ~child]
+         ~@body))))
+
+(expect
+  {:ancestors [], :child_collections []}
+  (with-a-family-of-collections-and-permissions [_ _ child]
+    (api-get-collection-ancestors-and-child-collections child)))
+
+(expect
+  {:ancestors ["Parent"], :child_collections []}
+  (with-a-family-of-collections-and-permissions [_ parent child]
+    (api-get-collection-ancestors-and-child-collections child)))
+
+(expect
+  {:ancestors ["Grandparent" "Parent"], :child_collections []}
+  (with-a-family-of-collections-and-permissions [grandparent parent child]
+    (api-get-collection-ancestors-and-child-collections child)))
+
+;; make sure we filter out intermediate ancestors if you aren't able to see them!
+(expect
+  {:ancestors ["Grandparent"], :child_collections []}
+  (with-a-family-of-collections-and-permissions [grandparent _ child]
+    (api-get-collection-ancestors-and-child-collections child)))
+
+(defn- x []
+  {:ancestors [], :child_collections ["Child"]}
+  (with-a-family-of-collections-and-permissions [_ parent child]
+    (api-get-collection-ancestors-and-child-collections parent)))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
