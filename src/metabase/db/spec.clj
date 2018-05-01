@@ -38,3 +38,59 @@
           :subname (str "//" host ":" port "/" db)
           :delimiters "`"}
          (dissoc opts :host :port :db)))
+
+(defn exasol
+"Create a database specification for an Exasol database. Opts should include keys
+for :db, :user, and :password. You can also optionally set host and port.
+Delimiters are automatically set to \"`\"."
+[{:keys [host port db]
+  :or {host "localhost", port 8563, db ""}
+  :as opts}]
+(merge {:classname "com.exasol.jdbc.EXADriver" ; must be in classpath
+        :subprotocol "exa"
+        :subname (str host ":" port "/" db)}
+        (dissoc opts :host :port :db)))
+
+(defn exasol
+  "Create a database specification for an Exasol database. Opts should include keys
+  for :db, :user, and :password. You can also optionally set host and port.
+  Delimiters are automatically set to \"`\"."
+  [{:keys [host port db]
+    :or {host "localhost", port 8563, db ""}
+    :as opts}]
+  (merge {:classname "com.exasol.jdbc.EXADriver" ; must be in classpath
+          :subprotocol "exa"
+          :user "sys"
+          :password "exasol"
+          :subname (str host ":" port )} ; "?schema=" db)}
+          ; (dissoc opts :host :port :db)
+          ))
+
+(defn exasol_copy
+  "Create a database specification for an Exasol database. Opts should include keys
+  for :db, :user, and :password. You can also optionally set host and port.
+  Delimiters are automatically set to \"`\"."
+  [{:keys [host port db]
+    :or {host "localhost", port 8563, db "revolut-analytics"}
+    :as opts}]
+  (merge {:classname "com.exasol.jdbc.EXADriver" ; must be in classpath
+          :subprotocol "exa"
+          :user "sys"
+          :password "exasol"
+          :schema "revolut_analytics"
+          :subname (str host ":" port )} ; "?schema=" db)}
+          (dissoc opts :host :port :db)
+          ))
+
+(defn exasol_fake
+  "Create a database specification for a postgres database. Opts should include
+  keys for :db, :user, and :password. You can also optionally set host and
+  port."
+  [{:keys [host port db]
+    :or {host "localhost", port 5432, db ""}
+    :as opts}]
+  (merge {:classname "org.postgresql.Driver" ; must be in classpath
+          :subprotocol "postgresql"
+          :subname (str "//" host ":" port "/" db "?OpenSourceSubProtocolOverride=true")}
+            (dissoc opts :host :port :db)))
+        
