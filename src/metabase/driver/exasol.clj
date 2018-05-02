@@ -49,18 +49,6 @@ clojure.lang.Named
                  (dissoc opts :host :port :dbname :db :ssl))
       (sql/handle-additional-options opts)))
 
-
-   (defn- connection-details->spec_old [{ssl? :ssl, :as details-map}]
-    (-> details-map
-        (update :port (fn [port]
-                        (if (string? port)
-                          (Integer/parseInt port)
-                          port)))
-        (dissoc :ssl)
-        (rename-keys {:dbname :schema})
-        dbspec/exasol
-        (sql/handle-additional-options details-map)))
-
 (defn- unix-timestamp->timestamp [expr seconds-or-milliseconds]
   (hsql/call :from_posix_time (case seconds-or-milliseconds
                               :seconds      expr
