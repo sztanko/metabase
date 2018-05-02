@@ -39,7 +39,18 @@ clojure.lang.Named
    (keyword "TIMESTAMP WITH LOCAL TIME ZONE") :type/DateTime})
 
 
-   (defn- connection-details->spec [{ssl? :ssl, :as details-map}]
+   (defn- connection-details->spec [{:keys [host port schema], :as opts}]
+    ; :or   {host "localhost", port 8563, db ""}
+    ; :as   details}]
+      (-> (merge {:classname   "com.exasol.jdbc.EXADriver"
+                  :subprotocol "exa"
+                  :subname     (str host ":" port)
+                  :schema schema}
+                 (dissoc opts :host :port :dbname :db :ssl))
+      (sql/handle-additional-options opts)))
+
+
+   (defn- connection-details->spec_old [{ssl? :ssl, :as details-map}]
     (-> details-map
         (update :port (fn [port]
                         (if (string? port)
@@ -107,9 +118,9 @@ clojure.lang.Named
                                              :display-name "Port"
                                              :type         :integer
                                              :default      8563}
-                                            {:name         "dbname"
-                                             :display-name "Database name"
-                                             :placeholder  "birds_of_the_word"
+                                            {:name         "schema"
+                                             :display-name "Schema"
+                                             :placeholder  "sys"
                                              :required     true}
                                             {:name         "user"
                                              :display-name "Database username"

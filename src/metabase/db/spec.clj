@@ -38,31 +38,3 @@
           :subname (str "//" host ":" port "/" db)
           :delimiters "`"}
          (dissoc opts :host :port :db)))
-
-(defn exasol
-"Create a database specification for an Exasol database. Opts should include keys
-for :db, :user, and :password. You can also optionally set host and port.
-Delimiters are automatically set to \"`\"."
-[{:keys [host port db]
-  :or {host "localhost", port 8563, db ""}
-  :as opts}]
-(merge {:classname "com.exasol.jdbc.EXADriver" ; must be in classpath
-        :subprotocol "exa"
-        :subname (str host ":" port "/" db)}
-        (dissoc opts :host :port :db)))
-
-(defn exasol
-  "Create a database specification for an Exasol database. Opts should include keys
-  for :db, :user, and :password. You can also optionally set host and port.
-  Delimiters are automatically set to \"`\"."
-  [{:keys [host port db]
-    :or {host "localhost", port 8563, db ""}
-    :as opts}]
-  (merge {:classname "com.exasol.jdbc.EXADriver" ; must be in classpath
-          :subprotocol "exa"
-          :user "metabase"
-          :password "***"
-          :schema "***"
-          :subname (str host ":" port )}
-          ; (dissoc opts :host :port :db)
-          ))
