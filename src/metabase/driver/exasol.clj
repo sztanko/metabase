@@ -46,7 +46,7 @@ clojure.lang.Named
                           (Integer/parseInt port)
                           port)))
         (dissoc :ssl)
-        (rename-keys {:dbname :db})
+        (rename-keys {:dbname :schema})
         dbspec/exasol
         (sql/handle-additional-options details-map)))
 
