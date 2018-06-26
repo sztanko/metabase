@@ -35,9 +35,12 @@ RUN bin/build
 RUN apk del nodejs git wget python make g++
 RUN rm -rf /root/.lein /root/.m2 /root/.node-gyp /root/.npm /root/.yarn /root/.yarn-cache /tmp/* /var/cache/apk/* /app/source/node_modules
 
+# Add curl
+RUN apk add --update  curl
+
 # expose our default runtime port
 EXPOSE 3000
-
+HEALTHCHECK --interval=5s --timeout=3s --start-period=40s CMD curl --fail  http://localhost:3000/api/health || exit
 # build and then run it
 WORKDIR /app/source
 ENTRYPOINT ["./bin/start"]
