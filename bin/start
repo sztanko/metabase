@@ -107,4 +107,5 @@ JAVA_OPTS="$JAVA_OPTS --add-modules=java.xml.bind"                # Enable acces
 
 echo "Using these JAVA_OPTS: ${JAVA_OPTS}"
 
-exec java $JAVA_OPTS -jar ./target/uberjar/metabase.jar
+# exec java $JAVA_OPTS -jar ./target/uberjar/metabase.jar
+exec java $JAVA_OPTS -cp ./target/uberjar/metabase.jar:plugins/* metabase.core
