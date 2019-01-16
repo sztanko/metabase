@@ -60,7 +60,7 @@ clojure.lang.Named
 
 (def ^:private extract-integer (comp hx/->integer extract))
 
-(def ^:private ^:const one-day (hsql/raw "INTERVAL '1 day'"))
+(def ^:private ^:const one-day (hsql/raw "INTERVAL '1' day"))
 
 (defn- date [unit expr]
   (case unit
@@ -85,7 +85,7 @@ clojure.lang.Named
     :year            (extract-integer :year expr)))
 
 (defn- date-interval [unit amount]
-  (hsql/raw (format "(NOW() + INTERVAL '%d %s')" (int amount) (name unit))))
+  (hsql/raw (format "(NOW() + INTERVAL '%d' %s)" (int amount) (name unit))))
 
 (defn- string-length-fn [field-key]
   (hsql/call :char_length (hx/cast :Varchar field-key)))
